@@ -88,13 +88,15 @@ class NestedSet {
   }
 
   public function getDescendants($nodeId) {
-    return $this->getTree($nodeId);
+    $tree = $this->getTree($nodeId);
+    array_shift($tree);
+    return $tree;
   }
 
   public function getChildren($nodeId) {
-    $sql = "select node.* from {$this->table} as node"
+    $sql = "select node.* from {$this->table} as node "
         . "WHERE node.{$this->parentColumn} = :parent "
-        . "ORDER BY node.lft";
+        . "ORDER BY node.{$this->leftColumn}";
     $stmt = $this->pdo->prepare($sql);
     $stmt->execute(array('parent' => $nodeId));
 
@@ -102,10 +104,10 @@ class NestedSet {
   }
 
   public function getTreeLeafs($treeId = null) {
-    $sql = "SELECT * FROM {$this->table} WHERE {$this->rightColumn} = {$this->leftColumn} + 1";
+    $sql = "SELECT * FROM {$this->table} WHERE {$this->quoteIdent($this->rightColumn)} = {$this->quoteIdent($this->leftColumn)} + 1";
     $params = array();
     if ($treeId != null && $this->treeColumn != null) {
-      $sql .= " AND {$this->treeColumn} = :tree";
+      $sql .= " AND {$this->quoteIdent($this->treeColumn)} = :tree";
       $params = array(':tree' => $treeId);
     }
     $stmt = $this->pdo->prepare($sql);
@@ -116,10 +118,11 @@ class NestedSet {
   public function getAncestors($nodeId) {
 
     $sql = "SELECT parent.*
-            FROM {$this->table} AS node,{$this->table} AS parent
-            WHERE node.lft BETWEEN parent.lft AND parent.rgt
-              AND node.{$this->keyColumn} = :id
-            ORDER BY node.lft";
+            FROM {$this->quoteIdent($this->table)} AS node,{$this->quoteIdent($this->table)} AS parent
+            WHERE node.{$this->quoteIdent($this->leftColumn)} BETWEEN parent.{$this->quoteIdent($this->leftColumn)} AND parent.{$this->quoteIdent($this->rightColumn)}
+              AND node.{$this->quoteIdent($this->keyColumn)} = :id
+              AND parent.{$this->quoteIdent($this->keyColumn)} != :id
+            ORDER BY node.{$this->quoteIdent($this->leftColumn)}";
     $stmt = $this->pdo->prepare($sql);
     $stmt->execute(array(':id' => $nodeId));
     return $this->fetch($stmt, false);
@@ -129,11 +132,11 @@ class NestedSet {
 
     // ,(COUNT(parent.{$this->keyColumn}) - 1) AS depth
     $sql = "SELECT node.*
-				FROM {$this->table} AS node,
-        			{$this->table} AS parent
-                                WHERE node.{$this->leftColumn} BETWEEN parent.{$this->leftColumn} AND parent.{$this->rightColumn}
-        			AND parent.{$this->keyColumn} = :parent
-				ORDER BY node.{$this->leftColumn};";
+				FROM {$this->quoteIdent($this->table)} AS node,
+        			{$this->quoteIdent($this->table)} AS parent
+                                WHERE node.{$this->quoteIdent($this->leftColumn)} BETWEEN parent.{$this->quoteIdent($this->leftColumn)} AND parent.{$this->quoteIdent($this->rightColumn)}
+        			AND parent.{$this->quoteIdent($this->keyColumn)} = :parent
+				ORDER BY node.{$this->quoteIdent($this->leftColumn)};";
 
     $stmt = $this->pdo->prepare($sql);
     $stmt->execute(array('parent' => $parentId));
@@ -141,7 +144,7 @@ class NestedSet {
   }
 
   public function getRoots() {
-    $stmt = $this->pdo->prepare('select * from ' . $this->table . ' where ' . $this->parentColumn . ' is null or ' . $this->parentColumn . ' = 0');
+    $stmt = $this->pdo->prepare('select * from ' . $this->quoteIdent($this->table) . ' where ' . $this->quoteIdent($this->parentColumn) . ' is null or ' . $this->quoteIdent($this->parentColumn) . ' = 0');
     $stmt->execute();
     return $this->fetch($stmt, false);
   }
@@ -155,7 +158,7 @@ class NestedSet {
   }
 
   public function getNode($nodeId) {
-    $stmt = $this->pdo->prepare('select * from ' . $this->table . ' where ' . $this->keyColumn . ' = :id');
+    $stmt = $this->pdo->prepare('select * from ' . $this->quoteIdent($this->table) . ' where ' . $this->quoteIdent($this->keyColumn) . ' = :id');
     $stmt->execute(array(':id' => $nodeId));
     return $this->fetch($stmt);
   }
@@ -167,7 +170,7 @@ class NestedSet {
     $data[$this->parentColumn] = 0;
 
     if (isset($this->treeColumn) && $treeId == null) {
-      $sql = "select max({$this->treeColumn}) from {$this->table}";
+      $sql = "select max({$this->quoteIdent($this->treeColumn)}) from {$this->quoteIdent($this->table)}";
       $treeId = $this->pdo->query($sql)->fetchColumn() + 1;
     }
     if ($treeId != null) {
@@ -189,10 +192,10 @@ class NestedSet {
 
       $this->pdo->exec('LOCK TABLE ' . $this->table . ' WRITE;');
 
-      $sql = "select @myLeft := {$this->leftColumn} FROM {$this->table} WHERE {$this->keyColumn} = :parent";
+      $sql = "select @myLeft := {$this->quoteIdent($this->leftColumn)} FROM {$this->quoteIdent($this->table)} WHERE {$this->quoteIdent($this->keyColumn)} = :parent";
       $params = array('parent' => $parentId);
       if ($treeId) {
-        $sql .= " AND {$this->treeColumn} = :tree";
+        $sql .= " AND {$this->quoteIdent($this->treeColumn)} = :tree";
         $params['tree'] = $treeId;
         $data[$this->treeColumn] = $treeId;
       }
@@ -200,8 +203,8 @@ class NestedSet {
       $stmt->execute($params);
       $leftValue = $stmt->fetchColumn();
 
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->rightColumn} = {$this->rightColumn} + 2 WHERE {$this->rightColumn} > @myLeft" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->leftColumn} = {$this->leftColumn} + 2 WHERE {$this->leftColumn} > @myLeft" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->rightColumn)} = {$this->quoteIdent($this->rightColumn)} + 2 WHERE {$this->quoteIdent($this->rightColumn)} > @myLeft" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->leftColumn)} = {$this->quoteIdent($this->leftColumn)} + 2 WHERE {$this->quoteIdent($this->leftColumn)} > @myLeft" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
 
       $data[$this->leftColumn] = $leftValue + 1;
       $data[$this->rightColumn] = $leftValue + 2;
@@ -222,17 +225,19 @@ class NestedSet {
   }
 
   protected function insert($data) {
-    $sql = 'INSERT INTO ' . $this->table . ' (' . implode(',', array_keys($data)) . ') VALUES (' .
+    
+    $names = array_keys($data);
+    $sql = 'INSERT INTO ' . $this->quoteIdent($this->table) . ' (' . implode(',', array_map(array($this, 'quoteIdent'),$names)) . ') VALUES (' .
         implode(',', array_map(function ($column) {
               return ':' . $column;
-            }, array_keys($data))) . ')';
+            }, $names)) . ')';
 
     $stmt = $this->pdo->prepare($sql);
     return $stmt->execute($data);
   }
 
   public function countChildren($nodeId) {
-    $sql = "select count(*) from {$this->table} where {$this->parentColumn} = :id";
+    $sql = "select count(*) from {$this->quoteIdent($this->table)} where {$this->quoteIdent($this->parentColumn)} = :id";
     $stmt = $this->pdo->prepare($sql);
     $stmt->execute(array(':id' => $nodeId));
     return $stmt->fetchColumn();
@@ -253,20 +258,19 @@ class NestedSet {
 
       $this->pdo->exec('LOCK TABLE ' . $this->table . ' WRITE;');
 
-      $sql = "select @myRight := {$this->rightColumn}, {$this->parentColumn} FROM {$this->table} WHERE {$this->keyColumn} = :sibling";
+      $sql = "select @myRight := {$this->quoteIdent($this->rightColumn)}, {$this->quoteIdent($this->parentColumn)} FROM {$this->quoteIdent($this->table)} WHERE {$this->quoteIdent($this->keyColumn)} = :sibling";
       $params = array('sibling' => $siblingId);
       if ($treeId) {
-        $sql .= " AND {$this->treeColumn} = :tree";
+        $sql .= " AND {$this->quoteIdent($this->treeColumn)} = :tree";
         $params['tree'] = $treeId;
         $data[$this->treeColumn] = $treeId;
       }
       $stmt = $this->pdo->prepare($sql);
       $stmt->execute($params);
-      $rightValue = $stmt->fetchColumn();
-      $parentId = $stmt->fetchColumn(1);
-
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->rightColumn} = {$this->rightColumn} + 2 WHERE {$this->rightColumn} > @myRight" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->leftColumn} = {$this->leftColumn} + 2 WHERE {$this->leftColumn} > @myRight" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
+      list($rightValue, $parentId)= $stmt->fetch(\PDO::FETCH_NUM);
+      
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->rightColumn)} = {$this->quoteIdent($this->rightColumn)} + 2 WHERE {$this->quoteIdent($this->rightColumn)} > @myRight" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->leftColumn)} = {$this->quoteIdent($this->leftColumn)} + 2 WHERE {$this->quoteIdent($this->leftColumn)} > @myRight" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
 
       $data[$this->leftColumn] = $rightValue + 1;
       $data[$this->rightColumn] = $rightValue + 2;
@@ -293,24 +297,26 @@ class NestedSet {
 
       $sql = 'SELECT ';
       if ($this->treeColumn) {
-        $sql .= $this->treeColumn . ',';
+        $sql .= $this->quoteIdent($this->treeColumn) . ',';
       }
 
-      $sql .= " @myLeft := {$this->leftColumn}, @myRight := {$this->leftColumn}, @myWidth := {$this->rightColumn} - {$this->leftColumn} + 1 FROM {$this->table} WHERE {$this->keyColumn} = :node";
+      $sql .= " @myLeft := {$this->quoteIdent($this->leftColumn)}, @myRight := {$this->quoteIdent($this->rightColumn)}, @myWidth := {$this->quoteIdent($this->rightColumn)} - {$this->quoteIdent($this->leftColumn)} + 1, @myParent := {$this->quoteIdent($this->parentColumn)} FROM {$this->quoteIdent($this->table)} WHERE {$this->quoteIdent($this->keyColumn)} = :node";
       $params = array('node' => $nodeId);
       $stmt = $this->pdo->prepare($sql);
       $stmt->execute($params);
-      $treeId = $stmt->fetchColumn();
+      if ($this->treeColumn) {
+        $treeId = $stmt->fetchColumn();
+      }
 
-      $sqlDelete = "DELETE FROM {$this->table} WHERE {$this->leftColumn} = @myLeft";
-      if ($treeId) {
-        $sqlDelete .= " AND {$this->treeColumn} = " . $treeId;
+      $sqlDelete = "DELETE FROM {$this->quoteIdent($this->table)} WHERE {$this->quoteIdent($this->leftColumn)} = @myLeft";
+      if ($this->treeColumn) {
+        $sqlDelete .= " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId;
       }
       $this->pdo->exec($sqlDelete);
 
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->rightColumn} = {$this->rightColumn} - 1, {$this->leftColumn} = {$this->leftColumn} - 1 WHERE {$this->leftColumn} BETWEEN @myLeft AND @myRight" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->rightColumn} = {$this->rightColumn} - 2 WHERE {$this->rightColumn} > @myRight" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->leftColumn} = {$this->leftColumn} - 2 WHERE {$this->leftColumn} > @myRight" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->rightColumn)} = {$this->quoteIdent($this->rightColumn)} - 1, {$this->quoteIdent($this->leftColumn)} = {$this->quoteIdent($this->leftColumn)} - 1, {$this->quoteIdent($this->parentColumn)} = @myParent WHERE {$this->quoteIdent($this->leftColumn)} BETWEEN @myLeft AND @myRight" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->rightColumn)} = {$this->quoteIdent($this->rightColumn)} - 2 WHERE {$this->quoteIdent($this->rightColumn)} > @myRight" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->leftColumn)} = {$this->quoteIdent($this->leftColumn)} - 2 WHERE {$this->quoteIdent($this->leftColumn)} > @myRight" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
 
       $this->pdo->exec("UNLOCK TABLES;");
       $this->pdo->commit();
@@ -327,23 +333,25 @@ class NestedSet {
 
       $sql = 'SELECT ';
       if ($this->treeColumn) {
-        $sql .= $this->treeColumn . ',';
+        $sql .= $this->quoteIdent($this->treeColumn) . ',';
       }
 
-      $sql .= " @myLeft := {$this->leftColumn}, @myRight := {$this->leftColumn}, @myWidth := {$this->rightColumn} - {$this->leftColumn} + 1 FROM {$this->table} WHERE {$this->keyColumn} = :node";
+      $sql .= " @myLeft := {$this->quoteIdent($this->leftColumn)}, @myRight := {$this->quoteIdent($this->rightColumn)}, @myWidth := {$this->quoteIdent($this->rightColumn)} - {$this->quoteIdent($this->leftColumn)} + 1 FROM {$this->quoteIdent($this->table)} WHERE {$this->quoteIdent($this->keyColumn)} = :node";
       $params = array('node' => $nodeId);
       $stmt = $this->pdo->prepare($sql);
       $stmt->execute($params);
-      $treeId = $stmt->fetchColumn();
+      if ($this->treeColumn) {
+        $treeId = $stmt->fetchColumn();
+      }
 
-      $sqlDelete = "DELETE FROM {$this->table} WHERE {$this->leftColumn} BETWEEN @myLeft AND @myRight";
+      $sqlDelete = "DELETE FROM {$this->quoteIdent($this->table)} WHERE {$this->quoteIdent($this->leftColumn)} BETWEEN @myLeft AND @myRight";
       if ($treeId) {
-        $sqlDelete .= " AND {$this->treeColumn} = " . $treeId;
+        $sqlDelete .= " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId;
       }
       $this->pdo->exec($sqlDelete);
 
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->rightColumn} = {$this->rightColumn} - @myWidth WHERE {$this->rightColumn} > @myRight" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
-      $this->pdo->exec("UPDATE {$this->table} SET {$this->leftColumn} = {$this->leftColumn} - @myWidth WHERE {$this->leftColumn} > @myRight" . (isset($treeId) ? " AND {$this->treeColumn} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->rightColumn)} = {$this->quoteIdent($this->rightColumn)} - @myWidth WHERE {$this->quoteIdent($this->rightColumn)} > @myRight" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
+      $this->pdo->exec("UPDATE {$this->quoteIdent($this->table)} SET {$this->quoteIdent($this->leftColumn)} = {$this->quoteIdent($this->leftColumn)} - @myWidth WHERE {$this->quoteIdent($this->leftColumn)} > @myRight" . (isset($treeId) ? " AND {$this->quoteIdent($this->treeColumn)} = " . $treeId : ''));
 
       $this->pdo->exec("UNLOCK TABLES;");
       $this->pdo->commit();
@@ -354,7 +362,7 @@ class NestedSet {
   }
 
   public function deleteTree($treeId) {
-    $sql = "DELETE FROM {$this->table} WHERE {$this->treeColumn} = :tree";
+    $sql = "DELETE FROM {$this->quoteIdent($this->table)} WHERE {$this->quoteIdent($this->treeColumn)} = :tree";
     $stmt = $this->pdo->prepare($sql);
     return $stmt->execute(array(':tree' => $treeId));
   }
@@ -367,9 +375,21 @@ class NestedSetUtils {
     // TODO:
   }
 
-  public function treeze($array, $level = 0, $childrenKey = null) {
-    // TODO:
-  }
+  public static function treeze(array &$elements, $parentId = 0, $childrenKey = 'children') {
+    $branch = array();
+
+    foreach ($elements as $element) {
+        if ($element['parent_id'] == $parentId) {
+            $children = self::treeze($elements, $element['id']);
+            if ($children) {
+                $element[$childrenKey] = $children;
+            }
+            $branch[$element['id']] = $element;
+            unset($elements[$element['id']]);
+        }
+    }
+    return $branch;
+}
 
 }
 
